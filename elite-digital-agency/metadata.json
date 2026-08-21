@@ -1,0 +1,6 @@
+{
+  "name": "Elite Digital Agency",
+  "description": "Elite Digital Agency showcase featuring AI Automations, AI Calling Agents, Google Maps Store Setup, 3D Web Experiences, interactive Skills Galaxy with voice narration, and Admin Command Center.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
