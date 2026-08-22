@@ -22,10 +22,14 @@ import {
   RefreshCw,
   Search,
   Upload,
+  Loader2,
+  Image as ImageIcon,
+  Video as VideoIcon,
 } from 'lucide-react';
 import { Project, Skill, ContactInquiry, SocialMediaExample, AgencySettings, ProjectCategory } from '../types';
 import { StorageService } from '../lib/storage';
 import { VoiceService } from '../lib/voiceService';
+import { supabase } from '../lib/supabase';
 
 interface AdminDashboardProps {
   isOpen: boolean;
@@ -51,6 +55,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose 
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [testVoiceText, setTestVoiceText] = useState<string>('');
   const [saveToast, setSaveToast] = useState<string>('');
+
+  // Upload loading states
+  const [uploadingImage, setUploadingImage] = useState<boolean>(false);
+  const [uploadingVideo, setUploadingVideo] = useState<boolean>(false);
+  const [uploadingHeroVideo, setUploadingHeroVideo] = useState<boolean>(false);
 
   const loadData = () => {
     setIsAuthenticated(StorageService.isAdminLoggedIn());
@@ -95,6 +104,104 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose 
   const handleLogout = () => {
     StorageService.adminLogout();
     setIsAuthenticated(false);
+  };
+
+  // Helper: Supabase Upload Function with Local Fallback
+  const uploadFileToSupabase = async (file: File, folder: string = 'media'): Promise<string> => {
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${folder}/${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+    
+    try {
+      if (supabase && supabase.storage) {
+        const { data, error } = await supabase.storage
+          .from('project-media')
+          .upload(fileName, file, {
+            cacheControl: '3600',
+            upsert: true,
+          });
+
+        if (!error && data) {
+          const { data: publicUrlData } = supabase.storage
+            .from('project-media')
+            .getPublicUrl(fileName);
+          
+          if (publicUrlData?.publicUrl) {
+            return publicUrlData.publicUrl;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Supabase upload skipped or failed, falling back to Base64:', err);
+    }
+
+    // Fallback: Convert to Base64 if Supabase credentials are not connected
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Project Image Upload Handler
+  const handleImageFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !editingProject) return;
+
+    setUploadingImage(true);
+    try {
+      const uploadedUrl = await uploadFileToSupabase(file, 'images');
+      setEditingProject({
+        ...editingProject,
+        image_url: uploadedUrl,
+      });
+      showToast('Image uploaded successfully!');
+    } catch (error) {
+      console.error(error);
+      showToast('Failed to upload image');
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  // Project Video Upload Handler
+  const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !editingProject) return;
+
+    setUploadingVideo(true);
+    try {
+      const uploadedUrl = await uploadFileToSupabase(file, 'videos');
+      setEditingProject({
+        ...editingProject,
+        video_url: uploadedUrl,
+        media_type: 'video',
+      });
+      showToast('Video uploaded successfully!');
+    } catch (error) {
+      console.error(error);
+      showToast('Failed to upload video');
+    } finally {
+      setUploadingVideo(false);
+    }
+  };
+
+  // Settings Hero Video Upload Handler
+  const handleHeroVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingHeroVideo(true);
+    try {
+      const uploadedUrl = await uploadFileToSupabase(file, 'hero-videos');
+      setSettings({ ...settings, hero_video_url: uploadedUrl });
+      showToast('Hero video uploaded successfully!');
+    } catch (error) {
+      console.error(error);
+      showToast('Failed to upload hero video');
+    } finally {
+      setUploadingHeroVideo(false);
+    }
   };
 
   // Projects Handlers
@@ -162,7 +269,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose 
                 Elite Admin Command Center
               </h2>
               <span className="text-[10px] text-slate-400 font-light">
-                Manage Portfolio, Skills, Voices, Socials & Settings
+                Manage Portfolio, Direct Media Uploads, Skills & Settings
               </span>
             </div>
           </div>
@@ -492,51 +599,120 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose 
                         />
                       </div>
 
-                      {/* Media Settings */}
-                      <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
-                        <div className="text-xs font-bold text-amber-300 uppercase tracking-wide">
-                          Media & Visuals Configuration
+                      {/* DIRECT FILE UPLOADS & MEDIA CONFIGURATION */}
+                      <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-4">
+                        <div className="text-xs font-bold text-amber-300 uppercase tracking-wide flex items-center gap-2">
+                          <Upload className="w-4 h-4" />
+                          <span>Media Upload & Display Mode</span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div>
-                            <label className="block text-[11px] text-slate-400 uppercase mb-1">
-                              Primary Media Type
+
+                        <div>
+                          <label className="block text-[11px] text-slate-400 uppercase mb-1">
+                            Primary Media Display Mode
+                          </label>
+                          <select
+                            value={editingProject.media_type || 'image'}
+                            onChange={(e) => setEditingProject({ ...editingProject, media_type: e.target.value as any })}
+                            className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs"
+                          >
+                            <option value="image">Show Image</option>
+                            <option value="video">Show Uploaded Video File</option>
+                            <option value="youtube">Show YouTube Video Embed</option>
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* DIRECT IMAGE UPLOAD BOX */}
+                          <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 space-y-2">
+                            <label className="block text-xs font-semibold text-cyan-300 uppercase flex items-center gap-1.5">
+                              <ImageIcon className="w-3.5 h-3.5" />
+                              <span>Project Image (Supabase / Direct File)</span>
                             </label>
-                            <select
-                              value={editingProject.media_type || 'image'}
-                              onChange={(e) => setEditingProject({ ...editingProject, media_type: e.target.value as any })}
-                              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs"
-                            >
-                              <option value="image">Image (High-Res Picture)</option>
-                              <option value="video">Direct Video File (MP4/WebM)</option>
-                              <option value="youtube">YouTube Video Embed</option>
-                            </select>
+                            
+                            <label className="flex flex-col items-center justify-center border-2 border-dashed border-cyan-500/30 hover:border-cyan-400/80 bg-slate-950/60 rounded-lg p-3 cursor-pointer transition-colors text-center">
+                              {uploadingImage ? (
+                                <div className="flex items-center gap-2 text-xs text-cyan-400 py-2">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  <span>Uploading to Supabase...</span>
+                                </div>
+                              ) : (
+                                <>
+                                  <Upload className="w-5 h-5 text-cyan-400 mb-1" />
+                                  <span className="text-xs font-bold text-white">Click to Upload Image</span>
+                                  <span className="text-[10px] text-slate-400">PNG, JPG, WEBP, GIF</span>
+                                </>
+                              )}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                disabled={uploadingImage}
+                                onChange={handleImageFileUpload}
+                                className="hidden"
+                              />
+                            </label>
+
+                            {editingProject.image_url && (
+                              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-800">
+                                <img
+                                  src={editingProject.image_url}
+                                  alt="Preview"
+                                  className="w-12 h-12 rounded object-cover border border-slate-700 shrink-0"
+                                />
+                                <input
+                                  type="text"
+                                  value={editingProject.image_url}
+                                  onChange={(e) => setEditingProject({ ...editingProject, image_url: e.target.value })}
+                                  placeholder="Or paste image URL..."
+                                  className="flex-1 px-2 py-1 text-[11px] rounded bg-slate-950 border border-slate-800 text-slate-300"
+                                />
+                              </div>
+                            )}
                           </div>
 
-                          <div>
-                            <label className="block text-[11px] text-slate-400 uppercase mb-1">
-                              Image / Poster Thumbnail URL *
+                          {/* DIRECT VIDEO UPLOAD / YOUTUBE BOX */}
+                          <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 space-y-2">
+                            <label className="block text-xs font-semibold text-cyan-300 uppercase flex items-center gap-1.5">
+                              <VideoIcon className="w-3.5 h-3.5" />
+                              <span>Project Video (Direct Video Upload)</span>
                             </label>
-                            <input
-                              type="url"
-                              required
-                              value={editingProject.image_url}
-                              onChange={(e) => setEditingProject({ ...editingProject, image_url: e.target.value })}
-                              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs"
-                            />
-                          </div>
 
-                          <div>
-                            <label className="block text-[11px] text-slate-400 uppercase mb-1">
-                              Video or YouTube URL (Optional)
+                            <label className="flex flex-col items-center justify-center border-2 border-dashed border-cyan-500/30 hover:border-cyan-400/80 bg-slate-950/60 rounded-lg p-3 cursor-pointer transition-colors text-center">
+                              {uploadingVideo ? (
+                                <div className="flex items-center gap-2 text-xs text-cyan-400 py-2">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  <span>Uploading Video to Supabase...</span>
+                                </div>
+                              ) : (
+                                <>
+                                  <Upload className="w-5 h-5 text-cyan-400 mb-1" />
+                                  <span className="text-xs font-bold text-white">Click to Upload Video File</span>
+                                  <span className="text-[10px] text-slate-400">MP4, WEBM, MOV</span>
+                                </>
+                              )}
+                              <input
+                                type="file"
+                                accept="video/*"
+                                disabled={uploadingVideo}
+                                onChange={handleVideoFileUpload}
+                                className="hidden"
+                              />
                             </label>
-                            <input
-                              type="url"
-                              placeholder="https://..."
-                              value={editingProject.video_url || editingProject.youtube_url || ''}
-                              onChange={(e) => setEditingProject({ ...editingProject, video_url: e.target.value, youtube_url: e.target.value })}
-                              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs"
-                            />
+
+                            <div className="mt-2 pt-2 border-t border-slate-800 space-y-1.5">
+                              <input
+                                type="text"
+                                value={editingProject.video_url || editingProject.youtube_url || ''}
+                                onChange={(e) =>
+                                  setEditingProject({
+                                    ...editingProject,
+                                    video_url: e.target.value,
+                                    youtube_url: e.target.value,
+                                  })
+                                }
+                                placeholder="Or direct Video / YouTube URL..."
+                                className="w-full px-2 py-1 text-[11px] rounded bg-slate-950 border border-slate-800 text-slate-300"
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -591,7 +767,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose 
                         </button>
                         <button
                           type="submit"
-                          className="px-5 py-2 rounded-lg bg-cyan-500 text-slate-950 font-bold text-xs uppercase"
+                          disabled={uploadingImage || uploadingVideo}
+                          className="px-5 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs uppercase cursor-pointer disabled:opacity-50"
                         >
                           Save Project
                         </button>
@@ -1006,19 +1183,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose 
                         Hero Background Video & AI Presenter
                       </label>
                       <label className="px-3 py-1 rounded-md bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-[10px] uppercase cursor-pointer transition-colors inline-flex items-center gap-1.5">
-                        <Upload className="w-3.5 h-3.5" />
-                        <span>Upload Video File</span>
+                        {uploadingHeroVideo ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Uploading to Supabase...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-3.5 h-3.5" />
+                            <span>Upload Video File</span>
+                          </>
+                        )}
                         <input
                           type="file"
                           accept="video/mp4,video/webm,video/mov,video/*"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              const objUrl = URL.createObjectURL(file);
-                              setSettings({ ...settings, hero_video_url: objUrl });
-                              showToast('Video loaded from file!');
-                            }
-                          }}
+                          disabled={uploadingHeroVideo}
+                          onChange={handleHeroVideoUpload}
                           className="hidden"
                         />
                       </label>
